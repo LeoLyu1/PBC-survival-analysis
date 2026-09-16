@@ -22,4 +22,3 @@ The treatment-group log-rank test was not statistically significant (**p = 0.75*
 
 **Tools:** R, survival, survminer, cmprsk, dplyr, ggplot2, broom, car, and purrr.
 
-Data are included in the survival package. The source and poster are provided as supplied; the analysis has not been rerun for this upload.
