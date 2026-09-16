@@ -1,0 +1,803 @@
+---
+title: "STA475_Project"
+output: html_document
+---
+
+```{r}
+library(survival)
+library(dplyr)
+#install.packages("car")
+library(car)
+library(ggplot2)
+#install.packages("broom")
+library(broom)
+#install.packages("cmprsk")
+library(cmprsk)
+```
+
+
+```{r}
+data(pbc)
+data(pbcseq)
+```
+
+
+```{r}
+pbc0 <- pbc %>%
+  transmute(
+    id = id,
+    futime = time,
+    death = as.integer(status == 2),
+    transplant = as.integer(status == 1),
+
+    trt = factor(trt),
+    age = age,
+    sex = factor(sex),
+
+    ascites = ascites,
+    hepatomegaly = hepato,
+    spiders = spiders,
+    edema = edema,
+
+    bili = bili,
+    chol = chol,
+    albumin = albumin,
+    copper = copper,
+    alk_phos = alk.phos,
+    ast = ast,
+    trig = trig,
+    platelet = platelet,
+    protime = protime,
+
+    stage = stage
+  ) %>%
+  filter(!is.na(trt))
+```
+
+
+```{r}
+table(pbc0$death)
+table(pbc0$transplant)
+```
+
+```{r}
+colSums(is.na(pbc0))
+```
+```{r}
+pbc0 %>%
+  ggplot(aes(x = bili)) +
+  geom_histogram(bins = 30, color = "black", fill = "skyblue") +
+  labs(
+    x = "Bilirubin",
+    y = "Count",
+    title = "Distribution of Bilirubin" )
+```
+Very right-skewed, so transformation is needed. 
+
+```{r}
+pbc0 %>%
+  ggplot(aes(x = log(bili))) +
+  geom_histogram(
+    bins = 30,
+    fill = "mediumpurple2",
+    color = "honeydew3",
+    alpha = 0.9
+  ) +
+  labs(
+    title = "Distribution of log(Bilirubin)",
+    x = "log(Bilirubin)",
+    y = "Frequency"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+ggsave(
+  filename = "log_bilirubin_hist.png",
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+### KM plot
+
+```{r}
+library(survminer)
+
+km_fit_trt <- survfit(Surv(futime, death) ~ trt, data = pbc0)
+
+ggsurvplot(
+  km_fit_trt,
+  data = pbc0,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  pval = TRUE,
+  palette = c("#E69F00", "#56B4E9"),
+  legend.labs = c("D-penicillamine", "Placebo"),
+  legend.title = "Treatment",
+  title = "Kaplan-Meier Curves by Treatment Group",
+  xlab = "Follow-up Time (days)",
+  ylab = "Survival Probability",
+  ggtheme = theme_classic(base_size = 14)
+)
+
+ggsave(
+  filename = "pbc_km_plot.png",
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+```{r}
+km_plot <- ggsurvplot(
+  km_fit_trt,
+  data = pbc0,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  pval = TRUE,
+  palette = c("#E69F00", "#56B4E9"),
+  legend.labs = c("D-penicillamine", "Placebo"),
+  legend.title = "Treatment",
+  title = "Kaplan-Meier Curves by Treatment Group",
+  xlab = "Follow-up Time (days)",
+  ylab = "Survival Probability",
+  ggtheme = theme_classic(base_size = 14)
+)
+
+ggsave(
+  "KM_treatment_plot.png",
+  km_plot$plot,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+```{r}
+png("KM_treatment_plot.png", width = 7, height = 6, units = "in", res = 300)
+print(km_plot)
+dev.off()
+```
+
+
+## Univariate Cox Model 
+
+```{r}
+vars <- c(
+  "age", "sex", "trt",
+  "ascites", "hepatomegaly", "spiders", "edema",
+  "bili", "chol", "albumin", "copper",
+  "alk_phos", "ast", "trig",
+  "platelet", "protime", "stage"
+)
+
+uni_results <- lapply(vars, function(v) {
+
+  formula <- as.formula(
+    paste("Surv(futime, death) ~", v)
+  )
+
+  fit <- coxph(formula, data = pbc0)
+
+  s <- summary(fit)
+
+  data.frame(
+    variable = v,
+    HR = exp(coef(fit))[1],
+    lower95 = exp(confint(fit))[1],
+    upper95 = exp(confint(fit))[2],
+    p_value = s$coefficients[,5]
+  )
+
+})
+
+uni_results <- bind_rows(uni_results)
+
+uni_results
+```
+
+
+```{r}
+uni_results %>%
+  arrange(p_value)
+```
+
+
+```{r}
+pbc0 <- pbc0 %>%
+  mutate(log_bili = log(bili))
+```
+
+## Multivariable Cox
+
+
+```{r}
+cox_full <- coxph(
+  Surv(futime, death) ~ age + sex + trt +
+  ascites + hepatomegaly + spiders + edema +
+  log_bili + chol + albumin + copper + alk_phos +
+  ast + trig + platelet + protime + stage,
+  data = pbc0
+)
+
+summary(cox_full)
+AIC(cox_full)
+vif(cox_full)
+```
+
+```{r}
+cox_model2 <- coxph(
+  Surv(futime, death) ~ age + sex + edema + log_bili + albumin + protime + stage,
+  data = pbc0
+)
+
+summary(cox_model2)
+AIC(cox_model2)
+vif(cox_model2)
+```
+```{r}
+ph_test <- cox.zph(cox_model2)
+
+ph_test
+plot(ph_test)
+```
+Therefore, the extended Cox Proportional hazard model can be used and analyzed. 
+
+```{r}
+cox2_hr <- broom::tidy(cox_model2, conf.int = TRUE, exponentiate = TRUE) |>
+  transmute(
+    term_clean = term,
+    HR = estimate,
+    CI_lower = conf.low,
+    CI_upper = conf.high,
+    p_value = p.value,
+    sig = ifelse(p.value < 0.05, "Significant", "Non-significant")
+  ) |>
+  mutate(
+    hr_direction = ifelse(HR < 1, "Protective (HR<1)", "Risk (HR>1)")
+  )
+
+cox2_hr$term_clean <- dplyr::recode(
+  cox2_hr$term_clean,
+  age = "Age",
+  sexf = "Sex (female)",
+  edema = "Edema",
+  log_bili = "Log bilirubin",
+  albumin = "Albumin",
+  protime = "Prothrombin time",
+  stage = "Stage"
+)
+
+cox2_hr$term_clean <- factor(
+  cox2_hr$term_clean,
+  levels = rev(cox2_hr$term_clean)
+)
+
+forest_cox2 <- ggplot(
+  cox2_hr,
+  aes(x = HR, y = term_clean, color = hr_direction, shape = sig)
+) +
+  geom_point(size = 4) +
+  geom_errorbarh(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    height = 0.3,
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    color = "black",
+    linewidth = 0.6
+  ) +
+  scale_x_log10(
+    breaks = c(0.25, 0.5, 1, 2, 4, 8),
+    labels = c("0.25", "0.5", "1", "2", "4", "8")
+  ) +
+  scale_color_manual(
+    values = c(
+      "Protective (HR<1)" = "#2166ac",
+      "Risk (HR>1)" = "#b2182b"
+    ),
+    name = "Effect Direction"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Significant" = 16,
+      "Non-significant" = 1
+    ),
+    name = "Significance"
+  ) +
+  labs(
+    title = "Hazard Ratios – Baseline Cox Model",
+    subtitle = "Multivariable Cox model (95% CI)",
+    x = "Hazard Ratio",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "grey40"),
+    legend.position = "bottom",
+    legend.box = "vertical",
+    axis.text.y = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(forest_cox2)
+```
+
+## pbcseq (Time-varying model)
+
+```{r}
+pbcseq1 <- pbcseq %>%
+  filter(!is.na(trt)) %>%
+  transmute(
+    id = id,
+    day = day,
+    futime = futime,
+    status = status,
+
+    death = as.integer(status == 2),
+    transplant = as.integer(status == 1),
+
+    trt = factor(trt),
+    age = age,
+    sex = factor(sex),
+
+    ascites = ascites,
+    hepatomegaly = hepato,
+    spiders = spiders,
+    edema = edema,
+
+    bili = bili,
+    chol = chol,
+    albumin = albumin,
+    alk_phos = alk.phos,
+    ast = ast,
+    platelet = platelet,
+    protime = protime,
+    stage = stage
+  ) %>%
+  arrange(id, day) %>%
+  group_by(id) %>%
+  mutate(
+    tstart = day,
+    tstop = lead(day),
+    last_row = row_number() == n(),
+    tstop = if_else(last_row, futime, tstop),
+    event_death = as.integer(last_row & death == 1),
+    event_transplant = as.integer(last_row & transplant == 1),
+    log_bili = log(bili)
+  ) %>%
+  ungroup() %>%
+  filter(tstart < tstop)
+```
+
+
+```{r}
+# Sanity check 
+pbcseq1 %>% 
+  select(id, futime, status, day, tstart, tstop, event_death)
+```
+
+```{r}
+cox_ext1 <- coxph(
+  Surv(tstart, tstop, event_death) ~ age + sex + edema + log_bili + albumin + protime + stage + cluster(id),
+  data = pbcseq1
+)
+
+summary(cox_ext1)
+```
+
+```{r}
+# Sanity check
+
+length(unique(pbc0$id))
+
+length(unique(pbcseq1$id))
+
+library(dplyr)
+
+death_count_seq <- pbcseq1 %>%
+  group_by(id) %>%
+  summarise(n_death = sum(event_death, na.rm = TRUE), .groups = "drop")
+
+table(death_count_seq$n_death)
+death_count_seq %>% filter(n_death > 1)
+```
+
+```{r}
+ids_pbc0 <- sort(unique(pbc0$id))
+ids_seq  <- sort(unique(pbcseq1$id))
+
+setdiff(ids_pbc0, ids_seq)
+setdiff(ids_seq, ids_pbc0)
+length(intersect(ids_pbc0, ids_seq))
+length(ids_pbc0)
+length(ids_seq)
+
+# Sanity check 
+death_pbc <- pbc %>%
+  filter(status == 2) %>%
+  pull(id)
+
+death_pbcseq <- pbcseq1 %>%
+  filter(death == 1) %>%
+  pull(id) %>%
+  unique()
+
+setdiff(death_pbcseq, death_pbc)
+```
+
+```{r}
+coxext_hr <- broom::tidy(cox_ext1, conf.int = TRUE, exponentiate = TRUE) |>
+  transmute(
+    term_clean = term,
+    HR = estimate,
+    CI_lower = conf.low,
+    CI_upper = conf.high,
+    p_value = p.value,
+    sig = ifelse(p.value < 0.05, "Significant", "Non-significant")
+  ) |>
+  mutate(
+    hr_direction = ifelse(HR < 1, "Protective (HR<1)", "Risk (HR>1)")
+  )
+
+coxext_hr$term_clean <- dplyr::recode(
+  coxext_hr$term_clean,
+  age = "Age",
+  sexf = "Sex (female)",
+  edema = "Edema",
+  log_bili = "Log bilirubin",
+  albumin = "Albumin",
+  protime = "Prothrombin time",
+  stage = "Stage"
+)
+
+coxext_hr$term_clean <- factor(
+  coxext_hr$term_clean,
+  levels = rev(coxext_hr$term_clean)
+)
+
+forest_coxext <- ggplot(
+  coxext_hr,
+  aes(x = HR, y = term_clean, color = hr_direction, shape = sig)
+) +
+  geom_point(size = 4) +
+  geom_errorbarh(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    height = 0.3,
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    color = "black",
+    linewidth = 0.6
+  ) +
+  scale_x_log10(
+    breaks = c(0.125, 0.25, 0.5, 1, 2, 4, 8),
+    labels = c("0.125", "0.25", "0.5", "1", "2", "4", "8")
+  ) +
+  scale_color_manual(
+    values = c(
+      "Protective (HR<1)" = "#2166ac",
+      "Risk (HR>1)" = "#b2182b"
+    ),
+    name = "Effect Direction"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Significant" = 16,
+      "Non-significant" = 1
+    ),
+    name = "Significance"
+  ) +
+  labs(
+    title = "Hazard Ratios - Extended Cox Model",
+    subtitle = "Time-varying covariates with robust SE (95% CI)",
+    x = "Hazard Ratio",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "grey40"),
+    legend.position = "bottom",
+    legend.box = "vertical",
+    axis.text.y = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(forest_coxext)
+```
+
+
+### Comparison forest plot 
+```{r}
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+
+extract_ci <- function(fit, model_name) {
+  broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+    transmute(
+      model = model_name,
+      term = term,
+      HR = estimate,
+      lower = conf.low,
+      upper = conf.high
+    )
+}
+
+hr_long <- bind_rows(
+  extract_ci(cox_model2, "Baseline Cox"),
+  extract_ci(cox_ext1, "Extended Cox")
+) %>%
+  mutate(
+    term = dplyr::recode(
+      term,
+      age = "Age",
+      sexf = "Sex (female)",
+      edema = "Edema",
+      log_bili = "Log bilirubin",
+      albumin = "Albumin",
+      protime = "Prothrombin time",
+      stage = "Stage"
+    ),
+    direction = ifelse(HR < 1, "Protective", "Risk")
+  )
+
+term_order <- hr_long %>%
+  group_by(term) %>%
+  summarise(meanHR = mean(HR, na.rm = TRUE), .groups = "drop") %>%
+  arrange(meanHR) %>%
+  pull(term)
+
+hr_long <- hr_long %>%
+  mutate(term = factor(term, levels = term_order))
+
+p_forest <- ggplot(
+  hr_long,
+  aes(
+    x = HR,
+    y = term,
+    xmin = lower,
+    xmax = upper,
+    shape = model,
+    color = direction
+  )
+) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  geom_pointrange(
+    position = position_dodge(width = 0.6),
+    linewidth = 0.8,
+    size = 0.9
+  ) +
+  scale_x_log10() +
+  scale_color_manual(
+    values = c(
+      "Protective" = "#2166ac",
+      "Risk" = "#b2182b"
+    )
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Baseline Cox" = 16,
+      "Extended Cox" = 17
+    )
+  ) +
+  labs(
+    title = "Comparison of Hazard Ratios",
+    subtitle = "Baseline Cox vs Time-Varying Cox Model",
+    x = "Hazard Ratio",
+    y = NULL,
+    color = "Effect Direction",
+    shape = "Model"
+  ) +
+  theme_bw()
+
+p_forest
+
+ggsave(
+  filename = "forest_compare.png",
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+
+## Competing risk Model 
+
+```{r}
+pbc_fg <- pbc0 %>%
+  mutate(
+    fg_status = case_when(
+      death == 1 ~ 2,
+      transplant == 1 ~ 1,
+      TRUE ~ 0
+    )
+  ) %>%
+  select(
+    id, futime, fg_status,
+    age, sex, edema, log_bili, albumin, protime, stage
+  ) %>%
+  na.omit()
+```
+
+```{r}
+X_fg <- model.matrix(
+  ~ age + sex + edema + log_bili + albumin + protime + stage,
+  data = pbc_fg
+)[, -1]
+```
+
+```{r}
+fg_death <- crr(
+  ftime = pbc_fg$futime,
+  fstatus = pbc_fg$fg_status,
+  cov1 = X_fg,
+  failcode = 2,
+  cencode = 0
+)
+
+summary(fg_death)
+```
+
+
+```{r}
+fg_coef <- fg_death$coef
+fg_se <- sqrt(diag(fg_death$var))
+
+fg_results <- data.frame(
+  term = names(fg_coef),
+  HR = exp(fg_coef),
+  lower95 = exp(fg_coef - 1.96 * fg_se),
+  upper95 = exp(fg_coef + 1.96 * fg_se),
+  p_value = 2 * (1 - pnorm(abs(fg_coef / fg_se)))
+)
+
+fg_results
+```
+
+```{r}
+fg_results <- fg_results %>%
+  mutate(
+    sig = ifelse(p_value < 0.05, "Significant", "Non-significant"),
+    direction = ifelse(HR < 1, "Protective (HR<1)", "Risk (HR>1)")
+  )
+
+fg_results$term <- dplyr::recode(
+  fg_results$term,
+  age = "Age",
+  sexf = "Sex (female)",
+  edema = "Edema",
+  log_bili = "Log bilirubin",
+  albumin = "Albumin",
+  protime = "Prothrombin time",
+  stage = "Stage"
+)
+
+fg_results$term <- factor(
+  fg_results$term,
+  levels = rev(fg_results$term)
+)
+```
+
+```{r}
+forest_fg <- ggplot(
+  fg_results,
+  aes(x = HR, y = term, color = direction, shape = sig)
+) +
+  geom_point(size = 4) +
+  geom_errorbarh(
+    aes(xmin = lower95, xmax = upper95),
+    height = 0.3,
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    color = "black",
+    linewidth = 0.6
+  ) +
+  scale_x_log10(
+    breaks = c(0.25, 0.5, 1, 2, 4, 8),
+    labels = c("0.25", "0.5", "1", "2", "4", "8")
+  ) +
+  scale_color_manual(
+    values = c(
+      "Protective (HR<1)" = "#2166ac",
+      "Risk (HR>1)" = "#b2182b"
+    ),
+    name = "Effect Direction"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Significant" = 16,
+      "Non-significant" = 1
+    ),
+    name = "Significance"
+  ) +
+  labs(
+    title = "Hazard Ratios - Fine-Gray Model",
+    subtitle = "Death as event of interest, transplant as competing event",
+    x = "Subdistribution Hazard Ratio",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "grey40"),
+    legend.position = "bottom",
+    legend.box = "vertical",
+    axis.text.y = element_text(size = 10),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(forest_fg)
+ggsave(
+  filename = "forest_fg.png",
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+```{r}
+library(cmprsk)
+
+cif <- cuminc(
+  ftime = pbc_fg$futime,
+  fstatus = pbc_fg$fg_status
+)
+
+plot(
+  cif,
+  xlab = "Time (days)",
+  ylab = "Cumulative incidence",
+  lwd = 2,
+  col = c("#D55E00", "#0072B2")
+)
+
+legend(
+  "topleft",
+  legend = c("Death", "Transplant"),
+  col = c("#D55E00", "#0072B2"),
+  lwd = 2
+)
+
+```
+```{r}
+png(
+  filename = "cif_plot.png",
+  width = 6,
+  height = 4,
+  units = "in",
+  res = 300
+)
+
+plot(
+  cif,
+  xlab = "Time (days)",
+  ylab = "Cumulative incidence",
+  lwd = 2,
+  col = c("#D55E00", "#0072B2")
+)
+
+legend(
+  "topleft",
+  legend = c("Death", "Transplant"),
+  col = c("#D55E00", "#0072B2"),
+  lwd = 2
+)
+
+dev.off()
+```
+
